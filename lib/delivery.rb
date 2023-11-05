@@ -1,43 +1,58 @@
 # frozen_string_literal: true
 
 class PrepareDelivery
+  ValidationError = Class.new StandardError
+
   TRUCKS = { kamaz: 3000, gazel: 1000 }.freeze
 
   def initialize(order, user)
     @order = order
     @user = user
-    @result = { truck: nil, weight: nil, order_number: @order.id, address: nil, status: :ok }
+    @result = DeliveryResult.new
   end
 
   def perform(destination_address, delivery_date)
     validate_delivery_date!(delivery_date)
     validate_destination_address!(destination_address)
 
-    @result[:truck] = find_truck
-    @result[:weight] = calculate_weight
-    @result[:address] = destination_address
-
-    @result
-  rescue StandardError
-    handle_error
+    build_delivery_result(destination_address)
+  rescue ValidationError => e
+    handle_error(e.message)
   end
 
   private
 
   def validate_delivery_date!(delivery_date)
-    raise 'Дата доставки уже прошла' if delivery_date < Time.current
+    raise ValidationError, 'Дата доставки уже прошла' if delivery_date < Time.current
   end
 
   def validate_destination_address!(destination_address)
-    raise 'Нет адреса' unless valid_address?(destination_address)
+    missing_parts = missing_address_parts(destination_address)
+    return if missing_parts.empty?
+
+    raise ValidationError,
+          "Отсутствуют или неполные части адреса: #{missing_parts.join(', ')}"
+  end
+
+  def missing_address_parts(address)
+    %i[city street house].reject { |part| address.send(part).present? }
   end
 
   def valid_address?(address)
-    [address.city, address.street, address.house].all?(&:present?)
+    missing_address_parts(address).empty?
+  end
+
+  def build_delivery_result(address)
+    @result.truck = find_truck(address)
+    @result.weight = calculate_weight
+    @result.order_number = @order.id
+    @result.address = address
+
+    @result
   end
 
   def calculate_weight
-    @order.products.map(&:weight).sum
+    @order.products.sum(&:weight)
   end
 
   def find_truck
@@ -46,11 +61,12 @@ class PrepareDelivery
   end
 
   def handle_no_truck!
-    raise 'Нет машины'
+    raise ValidationError, 'Нет машины'
   end
 
-  def handle_error
-    @result[:status] = :error
+  def handle_error(error_message)
+    @result.status = :error
+    @result.error_message = error_message
 
     @result
   end
@@ -77,6 +93,19 @@ class Address
 
   def house
     'д. 5'
+  end
+end
+
+class DeliveryResult
+  attr_accessor :truck, :weight, :order_number, :address, :status, :error_message
+
+  def initialize
+    @truck = nil
+    @weight = nil
+    @order_number = nil
+    @address = nil
+    @status = :ok
+    @error_message = nil
   end
 end
 
